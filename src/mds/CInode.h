@@ -22,6 +22,7 @@
 #include "include/elist.h"
 #include "include/types.h"
 #include "include/lru.h"
+#include "common/RefCountedObj.h"
 
 #include "mdstypes.h"
 #include "flock.h"
@@ -54,6 +55,21 @@ class ObjectOperation;
 class EMetaBlob;
 
 ostream& operator<<(ostream& out, CInode& in);
+
+class cinode_backtrace_info_t {
+public:
+  int64_t location;
+  int64_t pool;
+  CInode *inode;
+  elist<struct cinode_backtrace_info_t*>::item item_logseg;
+  elist<struct cinode_backtrace_info_t*>::item item_inode;
+  cinode_backtrace_info_t(int64_t l, CInode *i, int64_t p = -1) : location(l), pool(p), inode(i) {
+    // on setlayout cases, forward pointers mean pool != location, but for all others it does
+    if (pool == -1) pool = location;
+  }
+  void add(elist<struct cinode_backtrace_info_t*> &logseg_backtraces);
+  void remove();
+};
 
 struct cinode_lock_info_t {
   int lock;
@@ -88,7 +104,6 @@ struct default_file_layout {
   }
 };
 WRITE_CLASS_ENCODER(default_file_layout);
-
 
 // cached inode wrapper
 class CInode : public MDSCacheObject {
@@ -430,10 +445,11 @@ public:
   elist<CInode*>::item item_dirty;
   elist<CInode*>::item item_caps;
   elist<CInode*>::item item_open_file;
-  elist<CInode*>::item item_renamed_file;
   elist<CInode*>::item item_dirty_dirfrag_dir;
   elist<CInode*>::item item_dirty_dirfrag_nest;
   elist<CInode*>::item item_dirty_dirfrag_dirfragtree;
+
+  elist<cinode_backtrace_info_t*> backtraces;
 
 private:
   // auth pin
@@ -472,10 +488,11 @@ private:
     parent(0),
     inode_auth(CDIR_AUTH_DEFAULT),
     replica_caps_wanted(0),
-    item_dirty(this), item_caps(this), item_open_file(this), item_renamed_file(this), 
+    item_dirty(this), item_caps(this), item_open_file(this),
     item_dirty_dirfrag_dir(this), 
     item_dirty_dirfrag_nest(this), 
     item_dirty_dirfrag_dirfragtree(this), 
+    backtraces(member_offset(cinode_backtrace_info_t, item_inode)),
     auth_pins(0), nested_auth_pins(0),
     auth_pin_freeze_allowance(0),
     nested_anchors(0),
@@ -577,11 +594,13 @@ private:
   void fetch(Context *fin);
   void _fetched(bufferlist& bl, bufferlist& bl2, Context *fin);  
 
-  void store_parent(Context *fin);
-  void _stored_parent(version_t v, Context *fin);
+  void store_backtrace(cinode_backtrace_info_t *info, Context *fin);
+  void _stored_backtrace(version_t v, cinode_backtrace_info_t *info, Context *fin);
 
   void build_backtrace(inode_backtrace_t& bt);
-  unsigned encode_parent_mutation(ObjectOperation& m);
+  unsigned encode_parent_mutation(ObjectOperation& m, int64_t pool);
+
+  void queue_backtrace(LogSegment *ls, int64_t location, int64_t pool = -1);
 
   void encode_store(bufferlist& bl) {
     __u8 struct_v = 2;

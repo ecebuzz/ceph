@@ -45,10 +45,11 @@ class LogSegment {
   elist<CDentry*> dirty_dentries;
 
   elist<CInode*>  open_files;
-  elist<CInode*>  renamed_files;
   elist<CInode*>  dirty_dirfrag_dir;
   elist<CInode*>  dirty_dirfrag_nest;
   elist<CInode*>  dirty_dirfrag_dirfragtree;
+
+  elist<cinode_backtrace_info_t*> backtraces;
 
   elist<MDSlaveUpdate*> slave_updates;
   
@@ -76,10 +77,10 @@ class LogSegment {
     dirty_inodes(member_offset(CInode, item_dirty)),
     dirty_dentries(member_offset(CDentry, item_dirty)),
     open_files(member_offset(CInode, item_open_file)),
-    renamed_files(member_offset(CInode, item_renamed_file)),
     dirty_dirfrag_dir(member_offset(CInode, item_dirty_dirfrag_dir)),
     dirty_dirfrag_nest(member_offset(CInode, item_dirty_dirfrag_nest)),
     dirty_dirfrag_dirfragtree(member_offset(CInode, item_dirty_dirfrag_dirfragtree)),
+    backtraces(member_offset(cinode_backtrace_info_t, item_logseg)),
     slave_updates(0), // passed to begin() manually
     inotablev(0), sessionmapv(0)
   { }

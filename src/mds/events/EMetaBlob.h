@@ -114,7 +114,7 @@ public:
     }
 
     void encode(bufferlist& bl) const {
-      __u8 struct_v = 3;
+      __u8 struct_v = 4;
       ::encode(struct_v, bl);
       assert(_enc.length());
       bl.append(_enc); 
@@ -392,9 +392,12 @@ private:
   // idempotent op(s)
   list<pair<metareqid_t,uint64_t> > client_reqs;
 
+  int64_t old_pool;
+  bool update_bt;
+
  public:
   void encode(bufferlist& bl) const {
-    __u8 struct_v = 3;
+    __u8 struct_v = 4;
     ::encode(struct_v, bl);
     ::encode(lump_order, bl);
     ::encode(lump_map, bl);
@@ -416,6 +419,8 @@ private:
     ::encode(client_reqs, bl);
     ::encode(renamed_dirino, bl);
     ::encode(renamed_dir_frags, bl);
+    ::encode(old_pool, bl);
+    ::encode(update_bt, bl);
   } 
   void decode(bufferlist::iterator &bl) {
     __u8 struct_v;
@@ -452,6 +457,10 @@ private:
     if (struct_v >= 3) {
       ::decode(renamed_dirino, bl);
       ::decode(renamed_dir_frags, bl);
+    }
+    if (struct_v >= 4) {
+      ::decode(old_pool, bl);
+      ::decode(update_bt, bl);
     }
   }
 
@@ -652,6 +661,13 @@ private:
   
   void add_dir_context(CDir *dir, int mode = TO_AUTH_SUBTREE_ROOT);
  
+  void add_old_pool(int64_t pool) {
+    old_pool = pool;
+  }
+  void update_backtrace() {
+    update_bt = true;
+  }
+
   void print(ostream& out) const {
     out << "[metablob";
     if (!lump_order.empty()) 

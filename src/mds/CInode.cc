@@ -68,6 +68,18 @@ ostream& CInode::print_db_line_prefix(ostream& out)
   return out << ceph_clock_now(g_ceph_context) << " mds." << mdcache->mds->get_nodeid() << ".cache.ino(" << inode.ino << ") ";
 }
 
+void cinode_backtrace_info_t::add(elist<cinode_backtrace_info_t*> &logseg_backtraces) {
+  logseg_backtraces.push_back(&item_logseg);
+  inode->backtraces.push_back(&item_inode);
+  inode->get(CInode::PIN_DIRTYPARENT);
+}
+
+void cinode_backtrace_info_t::remove() {
+  item_logseg.remove_myself();
+  item_inode.remove_myself();
+  inode->put(CInode::PIN_DIRTYPARENT);
+}
+
 /*
  * write caps and lock ids
  */
@@ -998,68 +1010,69 @@ void CInode::build_backtrace(inode_backtrace_t& bt)
   }
 }
 
-unsigned CInode::encode_parent_mutation(ObjectOperation& m)
+unsigned CInode::encode_parent_mutation(ObjectOperation& m, int64_t pool)
 {
   string path;
   make_path_string(path);
   m.setxattr("path", path);
 
   inode_backtrace_t bt;
+  bt.pool = pool;
   build_backtrace(bt);
-  
+
   bufferlist parent;
   ::encode(bt, parent);
   m.setxattr("parent", parent);
   return path.length() + parent.length();
 }
 
-struct C_Inode_StoredParent : public Context {
+struct C_Inode_StoredBacktrace : public Context {
   CInode *in;
+  cinode_backtrace_info_t *info;
   version_t version;
   Context *fin;
-  C_Inode_StoredParent(CInode *i, version_t v, Context *f) : in(i), version(v), fin(f) {}
+  C_Inode_StoredBacktrace(CInode *i, cinode_backtrace_info_t *c,
+			  version_t v, Context *f) : in(i), info(c), version(v), fin(f) {}
   void finish(int r) {
-    in->_stored_parent(version, fin);
+    in->_stored_backtrace(version, info, fin);
   }
 };
 
-void CInode::store_parent(Context *fin)
+void CInode::store_backtrace(cinode_backtrace_info_t *info, Context *fin)
 {
-  dout(10) << "store_parent" << dendl;
-  
   ObjectOperation m;
-  encode_parent_mutation(m);
+  // prev_pool will be the target pool on create,mkdir,etc.
+  encode_parent_mutation(m, info->pool);
 
   // write it.
   SnapContext snapc;
 
   object_t oid = get_object_name(ino(), frag_t(), "");
-  object_locator_t oloc(mdcache->mds->mdsmap->get_metadata_pool());
+
+  dout(10) << "store_parent for oid " << oid << " location " << info->location << " pool " << info->pool << dendl;
+
+  // store the backtrace in the specified pool
+  object_locator_t oloc(info->location);
 
   mdcache->mds->objecter->mutate(oid, oloc, m, snapc, ceph_clock_now(g_ceph_context), 0,
-				 NULL, new C_Inode_StoredParent(this, inode.last_renamed_version, fin) );
+				 NULL, new C_Inode_StoredBacktrace(this, info, inode.last_renamed_version, fin) );
 
 }
 
-void CInode::_stored_parent(version_t v, Context *fin)
+void CInode::_stored_backtrace(version_t v, cinode_backtrace_info_t *info, Context *fin)
 {
-  if (state_test(STATE_DIRTYPARENT)) {
-    if (v == inode.last_renamed_version) {
-      dout(10) << "stored_parent committed v" << v << ", removing from list" << dendl;
-      item_renamed_file.remove_myself();
-      state_clear(STATE_DIRTYPARENT);
-      put(PIN_DIRTYPARENT);
-    } else {
-      dout(10) << "stored_parent committed v" << v << " < " << inode.last_renamed_version
-	       << ", renamed again, not removing from list" << dendl;
-    }
-  } else {
-    dout(10) << "stored_parent committed v" << v << ", tho i wasn't on the renamed_files list" << dendl;
-  }
+  info->remove();
+  delete info;
   if (fin) {
     fin->finish(0);
     delete fin;
   }
+}
+
+void CInode::queue_backtrace(LogSegment *ls, int64_t location, int64_t pool) {
+  cinode_backtrace_info_t* info =
+    new cinode_backtrace_info_t(location, this, pool);
+  info->add(ls->backtraces);
 }
 
 
